@@ -172,26 +172,20 @@ fn preserve_case_pattern(original: &str, replacement: &str) -> String {
 
 /// Extracts punctuation prefix and suffix from a word
 fn extract_punctuation(word: &str) -> (&str, &str) {
-    let prefix_end = word.chars().take_while(|c| !c.is_alphanumeric()).count();
+    // Slice on byte offsets, not char counts: multi-byte punctuation such as
+    // "¡" or "…" makes the two differ, and slicing mid-character panics.
+    let prefix_end = word
+        .char_indices()
+        .find(|(_, c)| c.is_alphanumeric())
+        .map_or(word.len(), |(i, _)| i);
+
     let suffix_start = word
         .char_indices()
         .rev()
-        .take_while(|(_, c)| !c.is_alphanumeric())
-        .count();
+        .find(|(_, c)| c.is_alphanumeric())
+        .map_or(0, |(i, c)| i + c.len_utf8());
 
-    let prefix = if prefix_end > 0 {
-        &word[..prefix_end]
-    } else {
-        ""
-    };
-
-    let suffix = if suffix_start > 0 {
-        &word[word.len() - suffix_start..]
-    } else {
-        ""
-    };
-
-    (prefix, suffix)
+    (&word[..prefix_end], &word[suffix_start..])
 }
 
 /// Returns filler words appropriate for the given language code.
@@ -351,6 +345,31 @@ mod tests {
         assert_eq!(extract_punctuation("hello"), ("", ""));
         assert_eq!(extract_punctuation("!hello?"), ("!", "?"));
         assert_eq!(extract_punctuation("...hello..."), ("...", "..."));
+    }
+
+    #[test]
+    fn test_extract_punctuation_multibyte() {
+        // Multi-byte punctuation: byte offsets differ from char counts.
+        assert_eq!(extract_punctuation("¡hello!"), ("¡", "!"));
+        assert_eq!(extract_punctuation("hello…"), ("", "…"));
+        assert_eq!(extract_punctuation("«cita»"), ("«", "»"));
+        assert_eq!(extract_punctuation("“quoted”"), ("“", "”"));
+        // Accented letters are alphanumeric, so they are not punctuation.
+        assert_eq!(extract_punctuation("café!"), ("", "!"));
+        assert_eq!(extract_punctuation("¿café?"), ("¿", "?"));
+    }
+
+    #[test]
+    fn test_apply_custom_words_multibyte_punctuation() {
+        // Transcripts routinely contain "…", curly quotes and Spanish "¡"/"¿".
+        assert_eq!(
+            apply_custom_words("¡Hola!", &["Hola".to_string()], 0.5),
+            "¡Hola!"
+        );
+        assert_eq!(
+            apply_custom_words("that was great…", &["great".to_string()], 0.5),
+            "that was great…"
+        );
     }
 
     #[test]
